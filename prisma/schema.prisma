@@ -1,0 +1,307 @@
+// Prisma Schema for Buglyze Platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Model
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String?
+  name          String?
+  avatarUrl     String?
+  role          UserRole  @default(USER)
+  isVerified    Boolean   @default(false)
+  ssoProvider   String?
+  ssoId         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastLoginAt   DateTime?
+
+  // Relations
+  organizationMemberships OrganizationMember[]
+  testRuns                TestRun[]
+  auditLogs               AuditLog[]
+
+  @@index([email])
+  @@map("users")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+// Organization Model
+model Organization {
+  id           String             @id @default(uuid())
+  name         String
+  slug         String             @unique
+  plan         SubscriptionPlan   @default(FREE)
+  billingEmail String?
+  testQuota    Int                @default(10)
+  testUsage    Int                @default(0)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+  settings     Json?
+
+  // Relations
+  members      OrganizationMember[]
+  projects     Project[]
+  auditLogs    AuditLog[]
+  subscription Subscription?
+
+  @@index([slug])
+  @@map("organizations")
+}
+
+enum SubscriptionPlan {
+  FREE
+  PRO
+  TEAM
+  BUSINESS
+  ENTERPRISE
+}
+
+// Organization Member Model (Junction Table)
+model OrganizationMember {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  role           MemberRole   @default(MEMBER)
+  joinedAt       DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@map("organization_members")
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+// Project Model
+model Project {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  baseUrl        String?
+  description    String?
+  settings       Json?
+  isArchived     Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  archivedAt     DateTime?
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  testRuns       TestRun[]
+  monitors       Monitor[]
+
+  @@index([organizationId])
+  @@map("projects")
+}
+
+// Test Run Model
+model TestRun {
+  id                   String       @id @default(uuid())
+  projectId            String
+  url                  String
+  status               TestStatus   @default(QUEUED)
+  testType             TestType     @default(MANUAL)
+  startedAt            DateTime?
+  completedAt          DateTime?
+  duration             Int?         // seconds
+  triggeredById        String?
+  config               Json?
+  results              Json?
+  issuesCount          Int          @default(0)
+  performanceScore     Float?
+  accessibilityScore   Float?
+  seoScore             Float?
+  securityScore        Float?
+  createdAt            DateTime     @default(now())
+
+  project              Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  triggeredBy          User?        @relation(fields: [triggeredById], references: [id], onDelete: SetNull)
+  issues               Issue[]
+  artifacts            Artifact[]
+
+  @@index([projectId, createdAt])
+  @@index([status])
+  @@map("test_runs")
+}
+
+enum TestStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum TestType {
+  MANUAL
+  SCHEDULED
+  CI_CD
+  WEBHOOK
+}
+
+// Issue Model
+model Issue {
+  id             String        @id @default(uuid())
+  testRunId      String
+  type           IssueType
+  severity       IssueSeverity
+  title          String
+  description    String        @db.Text
+  location       String?
+  screenshotUrl  String?
+  recommendation String?       @db.Text
+  createdAt      DateTime      @default(now())
+
+  testRun        TestRun       @relation(fields: [testRunId], references: [id], onDelete: Cascade)
+
+  @@index([testRunId, severity])
+  @@map("issues")
+}
+
+enum IssueType {
+  UI
+  PERFORMANCE
+  SECURITY
+  ACCESSIBILITY
+  SEO
+  FUNCTIONALITY
+  NETWORK
+  JAVASCRIPT
+}
+
+enum IssueSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+// Artifact Model (Screenshots, HAR files, etc.)
+model Artifact {
+  id         String   @id @default(uuid())
+  testRunId  String
+  type       String   // screenshot, har, trace, video, dom_snapshot
+  url        String
+  metadata   Json?
+  size       Int?     // bytes
+  createdAt  DateTime @default(now())
+
+  testRun    TestRun  @relation(fields: [testRunId], references: [id], onDelete: Cascade)
+
+  @@index([testRunId, type])
+  @@map("artifacts")
+}
+
+// Monitor Model (Scheduled Tests)
+model Monitor {
+  id         String   @id @default(uuid())
+  projectId  String
+  name       String
+  url        String
+  schedule   String   // cron expression
+  config     Json?
+  isActive   Boolean  @default(true)
+  lastRunAt  DateTime?
+  nextRunAt  DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([isActive, nextRunAt])
+  @@map("monitors")
+}
+
+// Subscription Model
+model Subscription {
+  id                   String       @id @default(uuid())
+  organizationId       String       @unique
+  stripeCustomerId     String       @unique
+  stripeSubscriptionId String?      @unique
+  plan                 SubscriptionPlan
+  status               String       // active, canceled, past_due, etc.
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean      @default(false)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([stripeCustomerId])
+  @@map("subscriptions")
+}
+
+// Audit Log Model
+model AuditLog {
+  id             String       @id @default(uuid())
+  organizationId String?
+  userId         String?
+  action         String
+  resourceType   String?
+  resourceId     String?
+  ipAddress      String?
+  userAgent      String?      @db.Text
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([userId, createdAt])
+  @@map("audit_logs")
+}
+
+// Webhook Model
+model Webhook {
+  id          String   @id @default(uuid())
+  projectId   String?  // Can be project-specific or organization-wide
+  url         String
+  events      String[] // Array of event types to subscribe to
+  secret      String   // For verifying webhook signatures
+  isActive    Boolean  @default(true)
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId])
+  @@map("webhooks")
+}
+
+// API Key Model
+model ApiKey {
+  id        String   @id @default(uuid())
+  userId    String
+  name      String
+  key       String   @unique
+  lastUsed  DateTime?
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([key])
+  @@map("api_keys")
+}
