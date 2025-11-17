@@ -5,8 +5,8 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { executeTest } from '@/lib/workers/test-runner'
-import { aiAnalysisService } from '@/lib/services/ai-analysis'
+import { executeEnhancedTest } from '@/lib/workers/enhanced-test-runner'
+import { geminiAnalysisService } from '@/lib/services/gemini-analysis'
 import type { TestConfig } from '@/types'
 
 // Validation schema
@@ -131,17 +131,22 @@ async function executeTestAsync(testRunId: string, config: TestConfig) {
     // Update status to running (in production, update database)
     console.log(`Test ${testRunId} status: running`)
 
-    // Execute the test
-    const results = await executeTest(config)
+    // Execute the enhanced test with all features
+    const results = await executeEnhancedTest(config)
 
     console.log(`Test ${testRunId} completed successfully`)
     console.log(`Issues found: ${results.summary.totalIssues}`)
     console.log(`Overall score: ${results.summary.overallScore}`)
+    console.log(`Performance score: ${results.performance?.metrics.lcp}ms LCP`)
+    console.log(`Accessibility violations: ${results.accessibility?.violations.length || 0}`)
+    console.log(`SEO score: ${results.seo?.score || 0}`)
+    console.log(`Security score: ${results.security?.score || 0}`)
 
-    // Run AI analysis on results
-    const analysis = await aiAnalysisService.generateComprehensiveReport(
+    // Run Gemini AI analysis on results
+    const screenshotPaths = results.visual?.screenshots?.map(s => s.path) || []
+    const analysis = await geminiAnalysisService.generateComprehensiveReport(
       results,
-      [] // Screenshots would be passed here
+      screenshotPaths
     )
 
     console.log(`AI analysis completed for test ${testRunId}`)
